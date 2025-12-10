@@ -302,7 +302,7 @@ Answer: B</pre>
             }
         }
 
-        async function extractTextFromPDF(file) {
+      async function extractTextFromPDF(file) {
             const arrayBuffer = await file.arrayBuffer();
             const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
             let fullText = '';
@@ -311,9 +311,9 @@ Answer: B</pre>
                 const page = await pdf.getPage(i);
                 const textContent = await page.getTextContent();
                 
-                // CHANGE HERE: join with '\n' instead of ' '
-                // This preserves the list structure of the PDF
-                const pageText = textContent.items.map(item => item.str).join('\n');
+                // FIXED: Join with ' ' (space) to keep sentences together
+                // We will handle the line breaks in the parser function
+                const pageText = textContent.items.map(item => item.str).join(' ');
                 
                 fullText += pageText + '\n';
             }
@@ -321,68 +321,82 @@ Answer: B</pre>
             return fullText;
         }
         function parseQuizData(text) {
-            // --- STEP 1: PRE-PROCESSING / CLEANING ---
-            // The PDF often merges "Answer: X" onto the end of the previous line.
-            // We use Regex to find these hidden answers and force them to a new line.
-            
-            // 1. Force "Answer: X" to a new line if it is stuck to previous text
-            // Finds any char that isn't a newline, followed by "Answer:", and inserts a newline
-            let cleanText = text.replace(/([^\n])\s*(Answer:\s*[A-D])/gi, "$1\n$2");
+            // --- STEP 1: SMART FORMATTING ---
+            // Since we joined everything with spaces, we now have one giant blob of text.
+            // We use Regex to insert New Lines (\n) exactly where we need them.
 
-            // 2. Force "A.", "B)" etc to a new line if stuck to the end of Question text
-            // Finds text followed immediately by " A." or " B)" and inserts a newline
-            cleanText = cleanText.replace(/([^\n])\s+([A-D][\)\.]\s)/g, "$1\n$2");
+            let cleanText = text
+                // 1. Force "Question X" to a new line
+                .replace(/(Question\s+\d+)/gi, "\n$1")
+                // 2. Force Options (A., B., A), B)) to a new line
+                .replace(/\s([A-D][\)\.]\s)/g, "\n$1")
+                // 3. Force "Answer:" to a new line
+                .replace(/\s(Answer:\s*)/gi, "\n$1");
 
-            // --- STEP 2: PARSING ---
-            const questions = [];
             const lines = cleanText.split('\n').map(line => line.trim()).filter(line => line);
-            
+            const questions = [];
             let currentQuestion = null;
-            
+
+            const saveQuestion = () => {
+                if (currentQuestion) {
+                    // Final cleanup: remove the "Question X" label from the text if present
+                    currentQuestion.question = currentQuestion.question
+                        .replace(/^Question\s+\d+[:\.]?\s*/i, '')
+                        .trim();
+                    questions.push(currentQuestion);
+                }
+            };
+
             for (let i = 0; i < lines.length; i++) {
                 const line = lines[i];
-                
-                // Flexible Regex for Question headers (Matches "Question 1:", "Question 1.", etc)
-                if (line.match(/^Question\s+\d+[:\.]?/i)) {
-                    if (currentQuestion) {
-                        questions.push(currentQuestion);
-                    }
+
+                // Detect Question Start
+                if (line.match(/^Question\s+\d+/i)) {
+                    saveQuestion();
                     currentQuestion = {
-                        // Remove the "Question X:" label to get just the text
-                        question: line.replace(/^Question\s+\d+[:\.]?\s*/i, ''),
+                        question: line, // Temporarily keep full line
                         options: [],
                         answer: ''
                     };
                 }
-                // Check for Answer (Check this BEFORE options to prevent false positives if order varies)
-                else if (line.match(/^Answer:\s*[A-D]/i)) {
-                    if (currentQuestion) {
-                        currentQuestion.answer = line.match(/[A-D]/i)[0].toUpperCase();
-                    }
-                }
-                // Check for Options (Matches "A.", "A)", etc.)
+                // Detect Options (A., B., etc)
                 else if (line.match(/^[A-D][\)\.]/)) {
+                    // Safety: If we see "A" but already have an "A", it's a new question we missed
+                    if (currentQuestion && currentQuestion.options.some(o => o.letter === line.charAt(0))) {
+                        saveQuestion();
+                        currentQuestion = {
+                            question: "Question " + (questions.length + 1),
+                            options: [],
+                            answer: ''
+                        };
+                    }
+
                     if (currentQuestion) {
-                        const option = {
+                        currentQuestion.options.push({
                             letter: line.charAt(0),
                             text: line.substring(2).trim()
-                        };
-                        currentQuestion.options.push(option);
+                        });
                     }
                 }
-                // Handle multi-line question text
-                else if (currentQuestion && currentQuestion.options.length === 0 && !line.startsWith('Answer:')) {
-                    // If we haven't found options yet, this is likely part of the question text
-                    currentQuestion.question += ' ' + line;
+                // Detect Answer
+                else if (line.match(/^Answer:\s*[A-D]/i)) {
+                    if (currentQuestion) {
+                        // FIX FOR ISSUE #1: 
+                        // explicitly match the letter AFTER the colon
+                        const match = line.match(/Answer:\s*([A-D])/i);
+                        if (match && match[1]) {
+                            currentQuestion.answer = match[1].toUpperCase();
+                        }
+                    }
+                }
+                // Append multi-line question text
+                else if (currentQuestion && currentQuestion.options.length === 0) {
+                    currentQuestion.question += " " + line;
                 }
             }
             
-            // Push the final question
-            if (currentQuestion) {
-                questions.push(currentQuestion);
-            }
-            
-            // Filter out incomplete questions (missing options or answer)
+            saveQuestion(); // Save the last question
+
             return questions.filter(q => q.options.length > 0 && q.answer);
         }
         function displayQuiz() {
