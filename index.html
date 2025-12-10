@@ -310,13 +310,16 @@ Answer: B</pre>
             for (let i = 1; i <= pdf.numPages; i++) {
                 const page = await pdf.getPage(i);
                 const textContent = await page.getTextContent();
-                const pageText = textContent.items.map(item => item.str).join(' ');
+                
+                // CHANGE HERE: join with '\n' instead of ' '
+                // This preserves the list structure of the PDF
+                const pageText = textContent.items.map(item => item.str).join('\n');
+                
                 fullText += pageText + '\n';
             }
 
             return fullText;
         }
-
         function parseQuizData(text) {
             // --- STEP 1: PRE-PROCESSING / CLEANING ---
             // The PDF often merges "Answer: X" onto the end of the previous line.
